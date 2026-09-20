@@ -1,0 +1,92 @@
+name: Build LegacyPadDisplay iOS 12
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 15.4
+        run: |
+          sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
+          xcodebuild -version
+          xcodebuild -showsdks
+
+      - name: Install XcodeGen
+        run: |
+          brew install xcodegen
+          xcodegen --version
+
+      - name: Generate Xcode 15 compatible project
+        run: |
+          cd iOS
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("project.yml")
+          text = p.read_text()
+
+          if "projectFormat:" not in text:
+              text = text.replace(
+                  "options:\n",
+                  "options:\n  projectFormat: xcode15_3\n",
+                  1
+              )
+
+          p.write_text(text)
+          PY
+
+          rm -rf LegacyPadDisplay.xcodeproj
+          xcodegen generate
+
+          grep "objectVersion" LegacyPadDisplay.xcodeproj/project.pbxproj | head -1
+
+      - name: Build unsigned iOS app
+        run: |
+          cd iOS
+
+          xcodebuild \
+            -project LegacyPadDisplay.xcodeproj \
+            -scheme LegacyPadDisplay \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$PWD/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            DEVELOPMENT_TEAM="" \
+            ONLY_ACTIVE_ARCH=NO \
+            clean build
+
+      - name: Create unsigned IPA
+        run: |
+          cd iOS
+
+          APP="DerivedData/Build/Products/Release-iphoneos/LegacyPadDisplay.app"
+
+          if [ ! -d "$APP" ]; then
+            echo "LegacyPadDisplay.app was not found"
+            find DerivedData -maxdepth 6 -name "*.app" -print
+            exit 1
+          fi
+
+          rm -rf Payload
+          mkdir Payload
+          cp -R "$APP" Payload/
+
+          /usr/bin/zip -qry LegacyPadDisplay-unsigned.ipa Payload
+
+          ls -lh LegacyPadDisplay-unsigned.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: LegacyPadDisplay-iOS12-unsigned
+          path: iOS/LegacyPadDisplay-unsigned.ipa
+          if-no-files-found: error
